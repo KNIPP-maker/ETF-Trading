@@ -8,14 +8,12 @@ import random
 import math
 from datetime import datetime
 from dotenv import load_dotenv
-
-from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
-                             QHBoxLayout, QLabel, QPushButton, QTableWidget, 
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
+                             QHBoxLayout, QLabel, QPushButton, QTableWidget,
                              QTableWidgetItem, QHeaderView, QLineEdit, QSplitter, QFrame)
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QColor, QFont, QPalette
 from qasync import QEventLoop
-
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from utils.kiwoom_client import KiwoomRESTClient
 from services.trade_logger import TradeLogger
@@ -27,20 +25,18 @@ load_dotenv()
 # =================================================================================
 IS_SIMULATION = False
 TOTAL_CAPITAL = 10_000_000_000  # 100억 세팅
-
 # [중요] 선물/지수 코드 설정 (HTS에서 확인 후 변경 필수)
 # 2025년 12월물 예시 코드입니다. 실제 코드로 변경하세요.
 INDEX_CODE = "200"        # KOSPI 200 지수
 FUTURES_CODE = "101WC000" # KOSPI 200 선물 (최근월물 코드)
-
 # [디자인 상수]
 COLOR_BG        = "#1e1e1e"
 COLOR_FG        = "#ffffff"
 COLOR_PANEL     = "#2d2d2d"
-COLOR_BUY       = "#d32f2f" 
-COLOR_SELL      = "#303f9f" 
-COLOR_PROFIT    = "#ff3333" 
-COLOR_LOSS      = "#3333ff" 
+COLOR_BUY       = "#d32f2f"
+COLOR_SELL      = "#303f9f"
+COLOR_PROFIT    = "#ff3333"
+COLOR_LOSS      = "#3333ff"
 COLOR_SIGNAL_BG = "#333"
 
 FONT_NUM        = QFont("Consolas", 12, QFont.Bold)
@@ -50,45 +46,58 @@ FONT_SIGNAL     = QFont("Malgun Gothic", 18, QFont.Bold)
 def exception_hook(exctype, value, tb):
     print("".join(traceback.format_exception(exctype, value, tb)))
 sys.excepthook = exception_hook
-
 # ==========================================================================
 # [전략 엔진] Basis 기반 차익거래/헤징 판독기
 # ==========================================================================
 class InternalSignalEngine:
     def __init__(self):
-        # Basis = 선물 - 현물
-        # 콘탱고(Contango, 선물>현물): 시장 상승 기대감 -> 레버리지 매수
-        # 백워데이션(Backwardation, 선물<현물): 시장 하락 공포 -> 인버스 매수
-        
-        # 진입 임계값 (시장 상황에 따라 튜닝 필요)
-        self.ENTRY_THRESHOLD = 0.50  # Basis가 +0.50 이상이면 레버리지
-        self.EXIT_THRESHOLD = 0.10   # Basis가 0.10 미만으로 줄어들면 청산
-        self.SHORT_THRESHOLD = -0.50 # Basis가 -0.50 이하이면 인버스
+        # [설정] Basis 임계값 튜닝
+        # 0.5 이상이면 강력한 매수 신호(콘탱고)
+        # -0.5 이하이면 강력한 매도 신호(백워데이션)
+        self.STRONG_BUY = 0.30
+        self.WEAK_BUY = 0.10
+        self.WEAK_SELL = -0.10
+        self.STRONG_SELL = -0.30
 
     def analyze(self, basis):
-        # 1. 상승장 (Contango 강세)
-        if basis >= self.ENTRY_THRESHOLD:
+        """
+        Basis를 분석하여 매매 신호와 UI 스타일을 반환
+        """
+        # 1. 레버리지 진입 구간 (상승장 예상)
+        if basis >= self.STRONG_BUY:
             return {
-                "action": "BUY_LEVERAGE", 
-                "msg": f"🚀 선물 주도 상승장 (Basis {basis:.2f})", 
-                "color": "#ffd700", "border": "red"
+                "action": "STRONG_BUY_LEV",
+                "msg": f"🚀 [강력 매수] 선물 주도 대상승 (Basis {basis:.2f})",
+                "color": "#ff0000", "border": "#ff0000", "bg": "#330000"
             }
-        # 2. 하락장 (Backwardation 심화)
-        elif basis <= self.SHORT_THRESHOLD:
+        elif basis >= self.WEAK_BUY:
             return {
-                "action": "BUY_INVERSE", 
-                "msg": f"📉 선물 주도 하락장 (Basis {basis:.2f})", 
-                "color": "#00ffff", "border": "blue"
+                "action": "WEAK_BUY_LEV",
+                "msg": f"📈 [매수 관점] 약한 콘탱고 (Basis {basis:.2f})",
+                "color": "#ffaaaa", "border": "#ff5555", "bg": "#221111"
             }
-        # 3. 횡보/청산 구간
-        elif abs(basis) < self.EXIT_THRESHOLD:
+        
+        # 2. 인버스 진입 구간 (하락장 예상)
+        elif basis <= self.STRONG_SELL:
             return {
-                "action": "EXIT", 
-                "msg": f"💰 차익 실현 구간 (Basis {basis:.2f})", 
-                "color": "#00ff00", "border": "green"
+                "action": "STRONG_BUY_INV",
+                "msg": f"📉 [강력 하락] 선물 투매 발생 (Basis {basis:.2f})",
+                "color": "#00ffff", "border": "#00ffff", "bg": "#003333"
             }
+        elif basis <= self.WEAK_SELL:
+            return {
+                "action": "WEAK_BUY_INV",
+                "msg": f"📉 [하락 관점] 약한 백워데이션 (Basis {basis:.2f})",
+                "color": "#aaaaff", "border": "#5555ff", "bg": "#111122"
+            }
+            
+        # 3. 중립 구간
         else:
-            return {"action": "HOLD", "msg": f"관망 중 (Basis {basis:.2f})", "color": "#aaa", "border": "#555"}
+            return {
+                "action": "HOLD",
+                "msg": f"👀 [관망] 방향성 탐색 중 (Basis {basis:.2f})",
+                "color": "#888", "border": "#444", "bg": "#1e1e1e"
+            }
 
 # ==========================================================================
 # [UI 컴포넌트]
@@ -107,7 +116,9 @@ class OrderPanel(QWidget):
     def initUI(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(2,2,2,2); layout.setSpacing(5)
-        
+
+       
+
         # 헤더
         header = QFrame(); header.setStyleSheet(f"background-color: {COLOR_PANEL}; border-radius: 5px;")
         h_layout = QHBoxLayout(header)
@@ -155,7 +166,6 @@ class OrderPanel(QWidget):
             else: item_bid.setBackground(QColor(255,0,0,30)); item_price.setForeground(QColor("#ff8888"))
             if price == self.curr_price: item_price.setForeground(QColor("white")); item_price.setBackground(QColor("#555")); item_price.setFont(FONT_NUM)
             self.table.setItem(i, 0, item_ask); self.table.setItem(i, 1, item_price); self.table.setItem(i, 2, item_bid)
-
 # ==========================================================================
 # [메인 트레이더]
 # ==========================================================================
@@ -165,21 +175,30 @@ class SolabTraderV13(QMainWindow):
         self.kiwoom = KiwoomRESTClient()
         self.logger = TradeLogger()
         self.engine = InternalSignalEngine()
-        
+
+       
+
         self.total_capital = TOTAL_CAPITAL
         self.current_cash = TOTAL_CAPITAL
         self.total_realized_profit = 0
-        
+
+       
+
         # [중요] 시장 데이터 컨테이너
         self.market_data = {
-            'kospi200': 0.0, 
-            'futures': 0.0, 
-            'lev_price': 0, 
+
+            'kospi200': 0.0,
+
+            'futures': 0.0,
+
+            'lev_price': 0,
+
             'inv_price': 0,
+
             'basis': 0.0
         }
         self.last_signal_time = 0
-        
+      
         self.initUI()
         QTimer.singleShot(1000, self.async_init)
 
@@ -190,12 +209,19 @@ class SolabTraderV13(QMainWindow):
 
         central = QWidget(); self.setCentralWidget(central); layout = QVBoxLayout(central)
 
+
         # Top Info
         top_frame = QFrame(); top_frame.setStyleSheet("background-color: #222; border-bottom: 2px solid #555;")
         t_layout = QHBoxLayout(top_frame)
-        self.lbl_cap = QLabel(f"운용자산: {self.total_capital:,}원"); self.lbl_cap.setFont(FONT_TITLE); t_layout.addWidget(self.lbl_cap)
+        
+        # ▼▼▼ 여기 1: '운용자산' -> '잔고' 로 수정 ▼▼▼
+        self.lbl_cap = QLabel(f"잔고: {self.total_capital:,}원"); self.lbl_cap.setFont(FONT_TITLE); t_layout.addWidget(self.lbl_cap)
+        
         self.lbl_cash = QLabel(f"가용현금: {self.total_capital:,}원"); self.lbl_cash.setFont(FONT_TITLE); self.lbl_cash.setStyleSheet("color: #ffff00;"); t_layout.addWidget(self.lbl_cash)
-        self.lbl_basis_info = QLabel("Basis: 0.00"); self.lbl_basis_info.setFont(FONT_TITLE); self.lbl_basis_info.setStyleSheet("color: #00ff00;"); t_layout.addWidget(self.lbl_basis_info)
+        
+        # ▼▼▼ 여기 2: 'Basis' -> 'Real Basis' 로 수정 ▼▼▼
+        self.lbl_basis_info = QLabel("Real Basis: 0.00"); self.lbl_basis_info.setFont(FONT_TITLE); self.lbl_basis_info.setStyleSheet("color: #00ff00;"); t_layout.addWidget(self.lbl_basis_info)
+        
         layout.addWidget(top_frame)
 
         # Signal Display
@@ -233,22 +259,18 @@ class SolabTraderV13(QMainWindow):
 
     def _safe_int(self, val):
         return int(self._safe_float(val))
-
     async def _fetch_real_data(self):
         try:
-            # 1. 잔고 조회
+            # 1. 잔고 조회 (기존 로직 유지)
             balance_data = await self.kiwoom.get_account_balance()
             if balance_data:
-                # 자산 파싱 (구조 유연하게 처리)
                 raw_total = balance_data.get('tot_asst_amt') or balance_data.get('tot_eval_amt') or "0"
                 raw_cash = balance_data.get('dbst_bal') or balance_data.get('dnca_tot_amt') or "0"
                 
-                # 시뮬레이션 금액(100억)과 실제 잔고 중 선택 (현재는 실제 잔고 반영)
                 if not IS_SIMULATION:
                     self.total_capital = self._safe_int(raw_total)
                     self.current_cash = self._safe_int(raw_cash)
 
-                # 보유수량 파싱
                 stock_list = balance_data.get('day_bal_rt', [])
                 if not stock_list and 'output' in balance_data:
                     stock_list = balance_data['output'].get('day_bal_rt', [])
@@ -268,18 +290,84 @@ class SolabTraderV13(QMainWindow):
                         self.panel_inv.holding_qty = qty
                         self.panel_inv.avg_price = avg
 
+            # 2. 시세 조회 (디버깅 강화)
+            tasks = [
+                self.kiwoom.get_current_price(self.panel_lev.code),
+                self.kiwoom.get_current_price(self.panel_inv.code),
+                self.kiwoom.get_current_price(INDEX_CODE),   
+                self.kiwoom.get_current_price(FUTURES_CODE)  
+            ]
+            
+            res_lev, res_inv, res_idx, res_fut = await asyncio.gather(*tasks, return_exceptions=True)
+
+            # [🔥 핵심 디버깅] 서버 응답 내용 터미널 출력
+            print(f"🔍 [현물/지수] 요청코드: {INDEX_CODE} -> 응답: {res_idx}")
+            print(f"🔍 [선물] 요청코드: {FUTURES_CODE} -> 응답: {res_fut}")
+
+            # 가격 파싱
+            def parse_price(res):
+                if not isinstance(res, dict): return 0
+                data = res.get('output', res)
+                candidates = ['stck_prpr', 'cur_prc', 'now_prc', 'clpr', 'sel_fpr_bid', 'buy_fpr_bid']
+                for key in candidates:
+                    if key in data:
+                        val = self._safe_float(data[key])
+                        if abs(val) > 0: return abs(val)
+                return 0
+
+            lev_p = parse_price(res_lev)
+            inv_p = parse_price(res_inv)
+            idx_p = parse_price(res_idx)
+            fut_p = parse_price(res_fut)
+
+            if lev_p > 0: self.market_data['lev_price'] = int(lev_p)
+            if inv_p > 0: self.market_data['inv_price'] = int(inv_p)
+            if idx_p > 0: self.market_data['kospi200'] = idx_p
+            if fut_p > 0: self.market_data['futures'] = fut_p
+
+            # 3. Basis 계산 및 UI 갱신
+            if self.market_data['futures'] > 0 and self.market_data['kospi200'] > 0:
+                real_basis = self.market_data['futures'] - self.market_data['kospi200']
+                self.market_data['basis'] = real_basis
+                # print(f"-> Basis: {real_basis:.2f}") # 너무 시끄러우면 주석 처리
+                
+                decision = self.engine.analyze(real_basis)
+                self._update_signal_ui(decision)
+            else:
+                # 데이터가 0일 때
+                real_basis = 0.00
+                decision = self.engine.analyze(0.0)
+                self._update_signal_ui(decision)
+
+            # 4. 화면 갱신
+            self.lbl_cap.setText(f"잔고: {self.total_capital:,}원")
+            self.lbl_cash.setText(f"가용현금: {self.current_cash:,}원")
+            
+            basis_color = "#ff5555" if real_basis > 0 else "#5555ff"
+            self.lbl_basis_info.setText(f"Real Basis: {real_basis:.2f}")
+            self.lbl_basis_info.setStyleSheet(f"color: {basis_color}; font-size: 16px; font-weight: bold;")
+            
+            self.panel_lev.update_ui(self.market_data['lev_price'], self.panel_lev.holding_qty, self.panel_lev.avg_price)
+            self.panel_inv.update_ui(self.market_data['inv_price'], self.panel_inv.holding_qty, self.panel_inv.avg_price)
+
+        except Exception as e:
+            print(f"!!! 에러: {e}")
+            
             # 2. [기관급 데이터 수신] 4개 시세 동시 요청
             # - ETF: 122630, 252670
             # - INDEX: KOSPI 200 (200)
             # - FUTURES: KOSPI 200 선물 (101...)
-            
+          
+
             tasks = [
                 self.kiwoom.get_current_price(self.panel_lev.code),
                 self.kiwoom.get_current_price(self.panel_inv.code),
                 self.kiwoom.get_current_price(INDEX_CODE),   # 지수 요청
                 self.kiwoom.get_current_price(FUTURES_CODE)  # 선물 요청
             ]
-            
+
+           
+
             # 병렬 요청으로 지연시간(Latency) 최소화
             res_lev, res_inv, res_idx, res_fut = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -287,7 +375,9 @@ class SolabTraderV13(QMainWindow):
             def parse_price(res, is_index=False):
                 if not isinstance(res, dict): return 0
                 data = res.get('output', res)
-                
+
+               
+
                 # 지수/선물은 키값이 다를 수 있음 (curr_prc, clpr, now_prc 등)
                 candidates = ['stck_prpr', 'cur_prc', 'now_prc', 'clpr', 'sel_fpr_bid', 'buy_fpr_bid']
                 for key in candidates:
@@ -296,7 +386,9 @@ class SolabTraderV13(QMainWindow):
                         if abs(val) > 0: return abs(val) # 무조건 양수 반환
                 return 0
 
+
             # 데이터 업데이트
+
             lev_p = parse_price(res_lev)
             inv_p = parse_price(res_inv)
             idx_p = parse_price(res_idx, is_index=True)
@@ -312,7 +404,7 @@ class SolabTraderV13(QMainWindow):
             if self.market_data['futures'] > 0 and self.market_data['kospi200'] > 0:
                 real_basis = self.market_data['futures'] - self.market_data['kospi200']
                 self.market_data['basis'] = real_basis
-                
+              
                 # 로그 출력 (중요: 데이터 들어오는지 확인용)
                 print(f"-> [Real Basis] 현물: {self.market_data['kospi200']:.2f} | 선물: {self.market_data['futures']:.2f} | Basis: {real_basis:.2f}")
             else:
@@ -321,21 +413,23 @@ class SolabTraderV13(QMainWindow):
                 real_basis = 0.00
 
             # 4. 화면 및 신호 갱신
-            self.lbl_cap.setText(f"운용자산: {self.total_capital:,}원")
+            
+            # ▼▼▼ 여기 3: '운용자산' -> '잔고' 로 수정 ▼▼▼
+            self.lbl_cap.setText(f"잔고: {self.total_capital:,}원")
+            
             self.lbl_cash.setText(f"가용현금: {self.current_cash:,}원")
             
             # Basis 색상 처리 (Contango: 빨강, Backwardation: 파랑)
             basis_color = "#ff5555" if real_basis > 0 else "#5555ff"
+            # (참고: 여기는 이미 Real Basis로 되어 있어서 수정 안 해도 됩니다)
             self.lbl_basis_info.setText(f"Real Basis: {real_basis:.2f}")
-            self.lbl_basis_info.setStyleSheet(f"color: {basis_color}; font-size: 16px; font-weight: bold;")
-            
+          
+
             # 전략 분석 및 신호 발생
             decision = self.engine.analyze(real_basis)
             self._update_signal_ui(decision)
-
             self.panel_lev.update_ui(self.market_data['lev_price'], self.panel_lev.holding_qty, self.panel_lev.avg_price)
             self.panel_inv.update_ui(self.market_data['inv_price'], self.panel_inv.holding_qty, self.panel_inv.avg_price)
-
         except Exception as e:
             print(f"!!! 데이터 처리 에러: {e}")
             print(traceback.format_exc())
@@ -346,41 +440,93 @@ class SolabTraderV13(QMainWindow):
             self.lbl_signal.setText(decision['msg'])
             self.lbl_signal.setStyleSheet(f"background-color: #222; color: {decision['color']}; border: 4px solid {decision['border']};")
             self.last_signal_time = time.time()
-            
+          
+
             # [자동 매매 연결 가능 지점]
             # if decision['action'] == "BUY_LEVERAGE": self.buy_percent("LEV", 0.1)
         else:
             self.lbl_signal.setText(decision['msg'])
             self.lbl_signal.setStyleSheet(f"background-color: {COLOR_SIGNAL_BG}; color: #555; border: none;")
-
     def core_loop(self):
         asyncio.create_task(self._process())
-
     async def _process(self):
         if IS_SIMULATION: pass
         else: await self._fetch_real_data()
-
     def keyPressEvent(self, event):
         key = event.key()
-        if key == Qt.Key_F1: self.buy_percent("LEV", 0.10)
-        elif key == Qt.Key_F2: self.buy_percent("LEV", 0.25)
-        elif key == Qt.Key_F3: self.buy_percent("INV", 0.10)
-        elif key == Qt.Key_F4: self.buy_percent("INV", 0.25)
-        elif key == Qt.Key_F5: self.sell_all()
-        elif key == Qt.Key_Space: self.sell_all()
-
-    def buy_percent(self, target, percent):
-        target_panel = self.panel_lev if target == "LEV" else self.panel_inv
-        other_panel = self.panel_inv if target == "LEV" else self.panel_lev
         
-        if other_panel.holding_qty > 0:
-            self.log(f"🔄 [스위칭] {other_panel.name} 청산 -> {target_panel.name} 진입")
-            self.execute_sell(other_panel, other_panel.holding_qty)
+        # --- [상승 배팅] 레버리지 ---
+        if key == Qt.Key_F1:
+            self.log("⌨️ [Key F1] 레버리지 10% 매수 요청")
+            self.buy_percent("LEV", 0.10)
             
-        invest_amount = self.total_capital * percent
-        if self.current_cash < invest_amount: invest_amount = self.current_cash
-        qty = int(invest_amount / target_panel.curr_price) if target_panel.curr_price > 0 else 0
-        if qty > 0: self.execute_buy(target_panel, qty)
+        elif key == Qt.Key_F2:
+            self.log("⌨️ [Key F2] 레버리지 50% 매수 요청 (물타기/불타기)")
+            self.buy_percent("LEV", 0.50)
+
+        # --- [하락 배팅] 인버스 ---
+        elif key == Qt.Key_F3:
+            self.log("⌨️ [Key F3] 인버스 10% 매수 요청")
+            self.buy_percent("INV", 0.10)
+            
+        elif key == Qt.Key_F4:
+            self.log("⌨️ [Key F4] 인버스 50% 매수 요청")
+            self.buy_percent("INV", 0.50)
+
+        # --- [청산] ---
+        elif key == Qt.Key_F5 or key == Qt.Key_Space:
+            self.log("⌨️ [Key Space/F5] 긴급 전량 청산")
+            self.sell_all()
+            
+        # --- [디버깅] 데이터 강제 갱신 ---
+        elif key == Qt.Key_F12:
+            self.log("🔄 데이터 강제 새로고침")
+            self.async_init()
+    def buy_percent(self, target_type, percent):
+        """
+        target_type: "LEV" (레버리지) or "INV" (인버스)
+        percent: 0.1 (10%), 0.2 (20%) ...
+        """
+        # 1. 타겟 설정
+        if target_type == "LEV":
+            target_panel = self.panel_lev
+            opp_panel = self.panel_inv
+            target_name = "🔴 레버리지"
+        else:
+            target_panel = self.panel_inv
+            opp_panel = self.panel_lev
+            target_name = "🔵 인버스"
+
+        # 2. [검증] 스위칭 로직 (반대 포지션 보유 시 전량 매도)
+        if opp_panel.holding_qty > 0:
+            self.log(f"⚡ [스위칭 감지] {opp_panel.name} 전량 청산 후 {target_name} 진입 시도")
+            
+            # 반대 포지션 매도 실행
+            # (주의: 실제 API 전송은 비동기지만, 로직상 현금 계산을 위해 즉시 처리)
+            self.execute_sell(opp_panel, opp_panel.holding_qty)
+            
+            # API 딜레이를 고려하여 약간의 로그 텀을 둠 (실제 sleep은 안함)
+            self.log(f"   -> 반대 포지션 청산 주문 완료.")
+
+        # 3. 매수 금액 계산
+        # 현재 가용 현금(스위칭 매도 금액 포함됨) * 비중
+        invest_amount = int(self.current_cash * percent)
+        
+        # 최소 주문 금액 안전장치 (예: 10만원 미만은 주문 X)
+        if invest_amount < 100000:
+            self.log(f"⚠️ [주문 불가] 매수 금액 부족 ({invest_amount:,}원)")
+            return
+
+        # 4. 수량 계산 및 매수
+        if target_panel.curr_price > 0:
+            qty = int(invest_amount / target_panel.curr_price)
+            if qty > 0:
+                self.execute_buy(target_panel, qty)
+                self.log(f"✅ [{target_name}] 자산의 {int(percent*100)}% 매수 완료 ({qty:,}주)")
+            else:
+                self.log(f"⚠️ 가격 데이터 오류 또는 잔고 부족")
+        else:
+            self.log(f"⚠️ 현재가 수신 대기 중...")
 
     def sell_all(self):
         self.log("💰 [전량 청산]")
@@ -393,24 +539,20 @@ class SolabTraderV13(QMainWindow):
         cost = qty * panel.curr_price; self.current_cash -= cost
         total = (panel.holding_qty * panel.avg_price) + cost
         panel.holding_qty += qty; panel.avg_price = total / panel.holding_qty
-
     def execute_sell(self, panel, qty):
         if qty <= 0: return
         self.log(f"💰 {panel.name} 매도: {qty:,}주")
         if not IS_SIMULATION: asyncio.create_task(self.kiwoom.send_order(panel.code, qty, "sell", 0))
         revenue = qty * panel.curr_price; profit = (panel.curr_price - panel.avg_price) * qty
         self.current_cash += revenue; self.total_realized_profit += profit
-        panel.holding_qty -= qty; 
+        panel.holding_qty -= qty;
         if panel.holding_qty <= 0: panel.holding_qty = 0; panel.avg_price = 0
-
     def log(self, msg):
         t = datetime.now().strftime("%H:%M:%S")
         self.log_view.insertRow(0); self.log_view.setItem(0, 0, QTableWidgetItem(f"[{t}] {msg}"))
-
     def async_init(self):
         if not IS_SIMULATION: asyncio.create_task(self.init_kiwoom())
         else: self.log("🧪 [SIMULATION MODE] 가상 데이터 구동 중...")
-
     async def init_kiwoom(self):
         try:
             import aiohttp
